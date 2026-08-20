@@ -23,14 +23,20 @@ def load_schedule():
 def save_schedule(physics: str, chemistry: str, math: str, strategy: str):
     supabase.table("schedule").upsert({"id": 1, "physics": physics, "chemistry": chemistry, "math": math, "strategy": strategy}).execute()
 
-def add_chapter_target(subject: str, chapter: str, total_lecs: int):
-    supabase.table("chapter_lectures").insert({"subject": subject, "chapter_name": chapter, "total_lectures": total_lecs, "completed_lectures": 0}).execute()
+def add_chapter_target(day_num: int, subject: str, chapter: str, total_lecs: int):
+    supabase.table("chapter_lectures").insert({
+        "day_number": day_num,
+        "subject": subject,
+        "chapter_name": chapter,
+        "total_lectures": total_lecs,
+        "completed_lectures": 0
+    }).execute()
 
 def update_lecture_progress(chapter_id: int, completed_count: int):
     supabase.table("chapter_lectures").update({"completed_lectures": completed_count}).eq("id", chapter_id).execute()
 
 def get_all_chapters():
-    res = supabase.table("chapter_lectures").select("*").order("id", desc=False).execute()
+    res = supabase.table("chapter_lectures").select("*").order("day_number", desc=False).execute()
     return res.data if res.data else []
 
 def delete_chapter(chapter_id: int):
@@ -116,20 +122,21 @@ with tab4:
     
     # 1. Input Form
     with st.expander("➕ Add New Chapter Target", expanded=True):
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c1: sub_in = st.selectbox("Subject", ["Physics", "Chemistry", "Mathematics"])
-        with c2: chap_in = st.text_input("Chapter Name", placeholder="e.g. Fluid Mechanics")
-        with c3: lecs_in = st.number_input("Total Lectures", min_value=1, value=4, step=1)
+        c_day, c_sub, c_chap, c_lecs = st.columns([1, 1, 2, 1])
+        with c_day: day_in = st.number_input("Day #", min_value=1, value=1, step=1)
+        with c_sub: sub_in = st.selectbox("Subject", ["Physics", "Chemistry", "Mathematics"])
+        with c_chap: chap_in = st.text_input("Chapter Name", placeholder="e.g. Fluid Mechanics")
+        with c_lecs: lecs_in = st.number_input("Total Lectures", min_value=1, value=4, step=1)
         
-        if st.button("Add Chapter"):
+        if st.button("Add Chapter Target"):
             if chap_in:
-                add_chapter_target(sub_in, chap_in, lecs_in)
-                st.success(f"Added {chap_in} with {lecs_in} lectures!")
+                add_chapter_target(day_in, sub_in, chap_in, lecs_in)
+                st.success(f"Added Day {day_in}: {chap_in} ({lecs_in} lectures)!")
                 st.rerun()
             else:
                 st.warning("Please enter a chapter name.")
 
-    # 2. Render Interactive Chapter Cards
+    # 2. Render Interactive Chapter Cards & Progress Bars
     chapters = get_all_chapters()
     if chapters:
         total_syllabus_lecs = sum(c['total_lectures'] for c in chapters)
@@ -137,20 +144,20 @@ with tab4:
         overall_pct = (total_completed_lecs / total_syllabus_lecs) if total_syllabus_lecs > 0 else 0.0
 
         st.markdown("---")
-        st.subheader("📊 Active Preparation Progress")
+        st.subheader("📊 Overall Preparation Progress")
         col_m1, col_m2 = st.columns(2)
-        with col_m1: st.metric("Lectures Finished", f"{total_completed_lecs} / {total_syllabus_lecs}")
-        with col_m2: st.metric("Total Completion", f"{overall_pct * 100:.1f}%")
+        with col_m1: st.metric("Total Lectures Finished", f"{total_completed_lecs} / {total_syllabus_lecs}")
+        with col_m2: st.metric("Overall Completion Rate", f"{overall_pct * 100:.1f}%")
         st.progress(overall_pct)
 
         st.markdown("---")
-        st.subheader("📚 Active Chapters")
+        st.subheader("📚 Active Chapters Tracker (Sorted by Day)")
 
         for ch in chapters:
             with st.container(border=True):
                 head_col, del_col = st.columns([5, 1])
                 with head_col:
-                    st.markdown(f"### {ch['subject']}: **{ch['chapter_name']}**")
+                    st.markdown(f"### 📅 **Day {ch.get('day_number', 1)}** | {ch['subject']}: **{ch['chapter_name']}**")
                 with del_col:
                     if st.button("🗑️ Delete", key=f"del_{ch['id']}"):
                         delete_chapter(ch['id'])
@@ -173,9 +180,9 @@ with tab4:
                     update_lecture_progress(ch['id'], new_completed)
                     st.rerun()
 
-                # Chapter Level Progress
+                # Individual Chapter Level Progress Bar
                 ch_pct = new_completed / ch['total_lectures']
                 st.progress(ch_pct)
-                st.caption(f"Chapter Progress: {new_completed}/{ch['total_lectures']} Lectures ({ch_pct * 100:.0f}%)")
+                st.caption(f"Chapter Progress: **{new_completed}/{ch['total_lectures']} Lectures** ({ch_pct * 100:.0f}% Completed)")
     else:
         st.info("No chapter targets set yet. Add a chapter above to start tracking!")
