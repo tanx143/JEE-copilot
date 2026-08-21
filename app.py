@@ -1,11 +1,11 @@
 import os
 import streamlit as st
-import streamlit.components.v1 as components
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 from typing import List, Optional
 import PIL.Image
+from streamlit_mic_recorder import speech_to_text
 
 # --- Supabase Connection ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
@@ -108,16 +108,15 @@ selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE",
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
-# --- TAB 1: Chat Interface with Direct Voice-to-Input Binding ---
+# --- TAB 1: Real-Time Voice-to-Text Input Sync ---
 with tab1:
     st.header("✨ Gemini Timetable Copilot")
-    st.caption("Prompt Gemini via voice transcription, text, or file attachments to update your schedule.")
+    st.caption("Prompt Gemini via text, speech recorder, or image attachment.")
 
-    # Initialize Voice State Buffer
-    if "prompt_buffer" not in st.session_state:
-        st.session_state.prompt_buffer = ""
+    if "voice_text" not in st.session_state:
+        st.session_state.voice_text = ""
 
-    # Display Active Strategy Box
+    # Active Strategy Display
     if "latest_response" in st.session_state:
         st.markdown(f"""
         <div class="gemini-card">
@@ -128,51 +127,22 @@ with tab1:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # JavaScript WebSpeech Bridge Component (Feeds directly into session state)
-    voice_result = components.html("""
-        <div style="font-family: sans-serif; display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-            <button id="micBtn" style="background-color: #ff4b4b; color: white; border: none; padding: 8px 14px; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 13px;">
-                🎙️ Click to Speak & Fill Bar
-            </button>
-            <span id="status" style="color: #aaa; font-size: 13px;">Microphone ready</span>
-        </div>
-        <script>
-            const micBtn = document.getElementById('micBtn');
-            const status = document.getElementById('status');
-            
-            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                const recognition = new SpeechRecognition();
-                recognition.continuous = false;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
+    # Native Speech Recorder Component
+    st.markdown("**🎙️ Record Your Speech:** Click to start speaking")
+    recorded_text = speech_to_text(
+        language='en',
+        start_prompt="🎙️ Start Voice Recording",
+        stop_prompt="🔴 Stop & Transcribe",
+        just_once=True,
+        key="STT"
+    )
 
-                micBtn.onclick = () => {
-                    recognition.start();
-                    status.innerText = "Listening... Speak your instruction now!";
-                    micBtn.style.backgroundColor = "#00c853";
-                };
+    # If voice is captured, update the session state buffer
+    if recorded_text and recorded_text != st.session_state.voice_text:
+        st.session_state.voice_text = recorded_text
+        st.rerun()
 
-                recognition.onresult = (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    status.innerText = "Transcribed successfully!";
-                    micBtn.style.backgroundColor = "#ff4b4b";
-                    
-                    // Send text to Streamlit component frame
-                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: transcript}, '*');
-                };
-
-                recognition.onerror = (event) => {
-                    status.innerText = "Error: " + event.error;
-                    micBtn.style.backgroundColor = "#ff4b4b";
-                };
-            } else {
-                status.innerText = "Speech API not supported in this browser. Use Chrome/Edge.";
-            }
-        </script>
-    """, height=50)
-
-    # Main Docked Prompt Bar Container
+    # Prompt Bar Container
     with st.container(border=True):
         c_add, c_input, c_send = st.columns([0.6, 8.1, 0.7])
         
@@ -183,9 +153,9 @@ with tab1:
                 uploaded_file = None
 
         with c_input:
-            # The chat bar input value updates dynamically if voice input is captured
             user_text = st.text_input(
                 "chat_bar_input",
+                value=st.session_state.voice_text,
                 placeholder="Ask Gemini to build or modify your daily timetable...",
                 label_visibility="collapsed"
             )
@@ -193,7 +163,7 @@ with tab1:
         with c_send:
             submit_btn = st.button("⬆️", use_container_width=True)
 
-    # Process Form Execution on Submit
+    # Submit Processing
     if submit_btn and (user_text or uploaded_file):
         if api_key:
             with st.spinner("Updating database via Gemini..."):
@@ -209,6 +179,7 @@ with tab1:
                               f"• **Math:** {new_plan.math_slot}"
                     
                     st.session_state.latest_response = summary
+                    st.session_state.voice_text = ""
                     st.success("Database updated successfully!")
                     st.rerun()
                 except Exception as e:
