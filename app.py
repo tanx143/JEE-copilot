@@ -1,6 +1,7 @@
 import os
 import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 from typing import List, Optional
@@ -60,26 +61,30 @@ class PYQQuestion(BaseModel):
 
 # --- AI Agents ---
 def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
-    # Explicitly using 'version="v1"' prevents the 404/v1beta endpoint error
+    # Updated to gemini-2.0-flash
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash",
         google_api_key=api_key,
-        temperature=0.3,
-        version="v1"
+        temperature=0.3
     )
     structured_llm = llm.with_structured_output(DynamicSchedule)
     
-    prompt = f"Current State: {current_state}\nUser Request: '{user_prompt}'"
+    prompt_text = f"Current State: {current_state}\nUser Request: '{user_prompt}'"
+    
     if image:
-        return structured_llm.invoke([prompt, image])
-    return structured_llm.invoke(prompt)
+        msg = HumanMessage(content=[
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": image}
+        ])
+        return structured_llm.invoke([msg])
+    
+    return structured_llm.invoke(prompt_text)
 
 def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PYQQuestion:
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash",
         google_api_key=api_key,
-        temperature=0.1,
-        version="v1"
+        temperature=0.1
     )
     return llm.with_structured_output(PYQQuestion).invoke(f"Subject: {subject}, Chapter: {chapter}, Exam: {exam}")
 
@@ -138,7 +143,7 @@ with tab1:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Native Speech Recorder Component
+    # Speech Recorder Component
     st.markdown("**🎙️ Record Your Speech:** Click to start speaking")
     recorded_text = speech_to_text(
         language='en',
@@ -148,7 +153,6 @@ with tab1:
         key="STT"
     )
 
-    # Update session state if voice recording is returned
     if recorded_text and recorded_text != st.session_state.voice_text:
         st.session_state.voice_text = recorded_text
         st.rerun()
