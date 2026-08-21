@@ -57,7 +57,7 @@ class PYQQuestion(BaseModel):
     correct_option: str = Field(description="Correct option letter")
     explanation: str = Field(description="Step-by-step solution")
 
-# --- AI Agents (Fixed Model: gemini-2.5-flash) ---
+# --- AI Agents ---
 def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.3)
     structured_llm = llm.with_structured_output(DynamicSchedule)
@@ -74,6 +74,7 @@ def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PY
 # --- UI Setup ---
 st.set_page_config(page_title="JEE / WBJEE AI Copilot", layout="wide", page_icon="⚡")
 
+# Custom Styling
 st.markdown("""
 <style>
     .stMetric {
@@ -96,6 +97,10 @@ st.markdown("""
         padding: 20px;
         margin-top: 15px;
     }
+    /* Floating Bar Simulation */
+    div[data-testid="stHorizontalBlock"] {
+        align-items: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,35 +112,56 @@ selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE",
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
-# --- TAB 1: Streamlined Gemini Chat Interface ---
+# --- TAB 1: Native Gemini Chat Bar Layout ---
 with tab1:
     st.header("✨ Gemini Timetable Copilot")
-    st.caption("Prompt Gemini via text, voice transcript, or syllabus image upload to update your database in real time.")
+    st.caption("Prompt Gemini to update your database in real time.")
 
-    # Attachments & Multimodal Toolbar (+)
-    with st.expander("📎 (+) Attach PDF / Image or Voice Transcript Input", expanded=False):
-        col_file, col_voice = st.columns(2)
-        with col_file:
-            uploaded_file = st.file_uploader("Upload Routine Image / Syllabus PDF", type=["png", "jpg", "jpeg"])
-        with col_voice:
-            voice_text = st.text_input("🎤 Voice Input / Dictation Transcript", placeholder="Speak using phone keyboard mic...")
-
-    # Active Response Card Container (Replaces bloated chat stack)
+    # Latest Active Strategy Card
     if "latest_response" in st.session_state:
         st.markdown(f"""
         <div class="gemini-card">
-            <h4 style="color: #4da6ff; margin-top:0;">✨ Latest Generated Plan</h4>
+            <h4 style="color: #4da6ff; margin-top:0;">✨ Active Generated Plan</h4>
             <p>{st.session_state.latest_response}</p>
         </div>
         """, unsafe_allow_html=True)
 
-    # Chat Input Interface
-    user_input = st.chat_input("Ask Gemini to build or modify your daily timetable...")
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # Process prompt if submitted via text, voice, or image
-    active_prompt = user_input or (voice_text if voice_text else None)
+    # Gemini Chat Dock Bar
+    with st.container(border=True):
+        c_add, c_input, c_mic, c_send = st.columns([0.6, 7.4, 0.7, 0.7])
+        
+        # Left Attachment (+) Button
+        with c_add:
+            with st.popover("➕", help="Attach File or Image"):
+                uploaded_file = st.file_uploader("Upload Image or Syllabus PDF", type=["png", "jpg", "jpeg"])
+            if "uploaded_file" not in locals():
+                uploaded_file = None
 
-    if active_prompt or uploaded_file:
+        # Middle Input Field
+        with c_input:
+            prompt_text = st.text_input(
+                "chat_bar", 
+                placeholder="Ask Gemini to build or modify your daily timetable...", 
+                label_visibility="collapsed"
+            )
+
+        # Right Mic Button
+        with c_mic:
+            with st.popover("🎤", help="Voice Dictation"):
+                voice_transcript = st.text_input("Voice Input", placeholder="Speak using phone mic...")
+            if "voice_transcript" not in locals():
+                voice_transcript = ""
+
+        # Right Submit Button (Up Arrow)
+        with c_send:
+            submit_btn = st.button("⬆️", use_container_width=True)
+
+    # Process Action
+    active_prompt = prompt_text if prompt_text else (voice_transcript if voice_transcript else None)
+
+    if submit_btn and (active_prompt or uploaded_file):
         if api_key:
             with st.spinner("Gemini is updating your cloud database..."):
                 try:
