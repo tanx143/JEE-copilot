@@ -4,4 +4,3 @@ google-generativeai
 groq
 pydantic
 pillow
-streamlit-mic-recorder
