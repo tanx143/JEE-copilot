@@ -3,3 +3,4 @@ supabase
 langchain-google-genai
 pydantic
 pillow
+streamlit-mic-recorder
