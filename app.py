@@ -1,10 +1,12 @@
 import os
 import streamlit as st
 import google.generativeai as genai
+from groq import Groq
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 from typing import List, Optional
 import PIL.Image
+import json
 from streamlit_mic_recorder import speech_to_text
 
 # --- Supabase Connection ---
@@ -58,42 +60,77 @@ class PYQQuestion(BaseModel):
     correct_option: str = Field(description="Correct option letter")
     explanation: str = Field(description="Step-by-step solution")
 
-# --- AI Agents ---
-def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    
+# --- AI Routing Logic ---
+def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, provider: str, image=None) -> DynamicSchedule:
     prompt = f"Current Schedule State: {current_state}\nUser Request: '{user_prompt}'\nGenerate updated structured timetable."
-    
-    contents = [prompt]
-    if image:
-        contents.append(image)
-        
-    response = model.generate_content(
-        contents,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            response_schema=DynamicSchedule,
-            temperature=0.3
-        )
-    )
-    return DynamicSchedule.model_validate_json(response.text)
 
-def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PYQQuestion:
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    
-    prompt = f"Subject: {subject}, Chapter: {chapter}, Exam Target: {exam}. Generate a realistic PYQ with step-by-step answer key."
-    
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            response_schema=PYQQuestion,
-            temperature=0.1
+    if provider == "Google Gemini":
+        genai.configure(api_key=api_key)
+        # Using gemini-1.5-flash-latest fixes the 404 error
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        
+        contents = [prompt]
+        if image:
+            contents.append(image)
+            
+        response = model.generate_content(
+            contents,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=DynamicSchedule,
+                temperature=0.3
+            )
         )
-    )
-    return PYQQuestion.model_validate_json(response.text)
+        return DynamicSchedule.model_validate_json(response.text)
+
+    elif provider == "Groq (Llama 3)":
+        client = Groq(api_key=api_key)
+        json_schema = DynamicSchedule.model_json_schema()
+        
+        system_msg = f"You are a study schedule assistant. You MUST respond ONLY with valid JSON matching this schema:\n{json.dumps(json_schema)}"
+        
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+        return DynamicSchedule.model_validate_json(completion.choices[0].message.content)
+
+def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str, provider: str) -> PYQQuestion:
+    prompt = f"Subject: {subject}, Chapter: {chapter}, Exam Target: {exam}. Generate a realistic PYQ with step-by-step answer key."
+
+    if provider == "Google Gemini":
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=PYQQuestion,
+                temperature=0.1
+            )
+        )
+        return PYQQuestion.model_validate_json(response.text)
+
+    elif provider == "Groq (Llama 3)":
+        client = Groq(api_key=api_key)
+        json_schema = PYQQuestion.model_json_schema()
+        system_msg = f"You are an exam generator. Respond ONLY in valid JSON matching this schema:\n{json.dumps(json_schema)}"
+        
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        return PYQQuestion.model_validate_json(completion.choices[0].message.content)
 
 # --- UI Setup ---
 st.set_page_config(page_title="JEE / WBJEE AI Copilot", layout="wide", page_icon="⚡")
@@ -125,16 +162,25 @@ st.markdown("""
 
 st.title("⚡ JEE / WBJEE / AUAT AI Study Copilot")
 
-api_key = st.sidebar.text_input("Enter Gemini API Key", type="password", key="sidebar_api_key_unique")
-selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE", "AUAT"], key="sidebar_target_exam_unique")
+# --- Sidebar Configuration ---
+ai_provider = st.sidebar.selectbox("Choose AI Engine", ["Google Gemini", "Groq (Llama 3)"], key="ai_provider_select")
+
+if ai_provider == "Google Gemini":
+    api_key = st.sidebar.text_input("Enter Gemini API Key", type="password", key="sidebar_gemini_key")
+    st.sidebar.caption("Get key from [aistudio.google.com](https://aistudio.google.com/)")
+else:
+    api_key = st.sidebar.text_input("Enter Groq API Key", type="password", key="sidebar_groq_key")
+    st.sidebar.caption("Get 100% free key from [console.groq.com](https://console.groq.com)")
+
+selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE", "AUAT"], key="sidebar_target_exam")
 
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
 # --- TAB 1: Chat Interface ---
 with tab1:
-    st.header("✨ Gemini Timetable Copilot")
-    st.caption("Prompt Gemini via text, speech recorder, or image attachment.")
+    st.header(f"✨ Timetable Copilot ({ai_provider})")
+    st.caption("Prompt your AI assistant via text, speech recorder, or image attachment.")
 
     if "voice_text" not in st.session_state:
         st.session_state.voice_text = ""
@@ -166,7 +212,7 @@ with tab1:
         c_add, c_input, c_send = st.columns([0.6, 8.1, 0.7])
         
         with c_add:
-            with st.popover("➕", help="Attach Image / PDF Routine"):
+            with st.popover("➕", help="Attach Image Routine (Gemini Only)"):
                 uploaded_file = st.file_uploader("Upload Routine File", type=["png", "jpg", "jpeg"], key="routine_file_uploader")
             if "uploaded_file" not in locals():
                 uploaded_file = None
@@ -175,7 +221,7 @@ with tab1:
             user_text = st.text_input(
                 "chat_bar_input",
                 value=st.session_state.voice_text,
-                placeholder="Ask Gemini to build or modify your daily timetable...",
+                placeholder="Ask AI to build or modify your daily timetable...",
                 label_visibility="collapsed",
                 key="main_chat_bar_input"
             )
@@ -185,11 +231,14 @@ with tab1:
 
     if submit_btn and (user_text or uploaded_file):
         if api_key:
-            with st.spinner("Updating database via Gemini..."):
+            with st.spinner(f"Updating schedule via {ai_provider}..."):
                 try:
                     img = PIL.Image.open(uploaded_file) if uploaded_file else None
                     
-                    new_plan = adjust_schedule_with_chat(user_text, current_sched, api_key, image=img)
+                    if uploaded_file and ai_provider == "Groq (Llama 3)":
+                        st.warning("Note: Image processing is currently only supported on Google Gemini. Proceeding with text prompt.")
+
+                    new_plan = adjust_schedule_with_chat(user_text, current_sched, api_key, ai_provider, image=img)
                     save_schedule(new_plan.physics_slot, new_plan.chemistry_slot, new_plan.math_slot, new_plan.strategy_advice)
                     
                     summary = f"**Strategy:** {new_plan.strategy_advice}\n\n" \
@@ -204,7 +253,7 @@ with tab1:
                 except Exception as e:
                     st.error(f"Error executing plan: {e}")
         else:
-            st.error("Please enter your Gemini API Key in the sidebar.")
+            st.error(f"Please enter your {ai_provider} API Key in the sidebar.")
 
 # --- TAB 2: PYQ Engine ---
 with tab2:
@@ -214,8 +263,8 @@ with tab2:
     with c_chap: chapter = st.text_input("Target Chapter", "Calculus - Definite Integration", key="pyq_chapter_input")
     if st.button("Generate Chapter PYQ", key="generate_pyq_btn"):
         if api_key:
-            with st.spinner("Fetching PYQ..."):
-                st.session_state.active_pyq = generate_pyq_quiz(subject, chapter, selected_exam, api_key)
+            with st.spinner(f"Fetching PYQ using {ai_provider}..."):
+                st.session_state.active_pyq = generate_pyq_quiz(subject, chapter, selected_exam, api_key, ai_provider)
         else: st.error("Please enter API Key.")
 
     if "active_pyq" in st.session_state:
