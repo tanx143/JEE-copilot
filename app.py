@@ -1,5 +1,6 @@
 import os
 import streamlit as st
+import streamlit.components.v1 as components
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
@@ -74,7 +75,6 @@ def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PY
 # --- UI Setup ---
 st.set_page_config(page_title="JEE / WBJEE AI Copilot", layout="wide", page_icon="⚡")
 
-# Custom Styling
 st.markdown("""
 <style>
     .stMetric {
@@ -97,10 +97,6 @@ st.markdown("""
         padding: 20px;
         margin-top: 15px;
     }
-    /* Floating Bar Simulation */
-    div[data-testid="stHorizontalBlock"] {
-        align-items: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,12 +108,15 @@ selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE",
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
-# --- TAB 1: Native Gemini Chat Bar Layout ---
+# --- TAB 1: Real-Time Browser Speech Recognition ---
 with tab1:
     st.header("✨ Gemini Timetable Copilot")
-    st.caption("Prompt Gemini to update your database in real time.")
+    st.caption("Prompt Gemini via text, voice, or file attachment to update your schedule.")
 
-    # Latest Active Strategy Card
+    if "voice_text" not in st.session_state:
+        st.session_state.voice_text = ""
+
+    # Display Active Strategy Box
     if "latest_response" in st.session_state:
         st.markdown(f"""
         <div class="gemini-card">
@@ -126,49 +125,82 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Gemini Chat Dock Bar
+    # Browser Microphone Component using WebSpeech API
+    st.markdown("**🎤 Browser Voice Recorder:** Click to start speaking")
+    components.html("""
+        <div style="font-family: sans-serif; display: flex; align-items: center; gap: 10px;">
+            <button id="micBtn" style="background-color: #ff4b4b; color: white; border: none; padding: 10px 16px; border-radius: 20px; cursor: pointer; font-weight: bold;">
+                🎙️ Start Voice Recording
+            </button>
+            <span id="status" style="color: #aaa; font-size: 14px;">Click button and speak...</span>
+        </div>
+        <script>
+            const micBtn = document.getElementById('micBtn');
+            const status = document.getElementById('status');
+            
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+
+                micBtn.onclick = () => {
+                    recognition.start();
+                    status.innerText = "Listening... Speak now!";
+                    micBtn.style.backgroundColor = "#00c853";
+                };
+
+                recognition.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    status.innerText = "Captured: '" + transcript + "'";
+                    micBtn.style.backgroundColor = "#ff4b4b";
+                    
+                    // Send captured transcript back to parent Streamlit state
+                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: transcript}, '*');
+                };
+
+                recognition.onerror = (event) => {
+                    status.innerText = "Error capturing voice: " + event.error;
+                    micBtn.style.backgroundColor = "#ff4b4b";
+                };
+            } else {
+                status.innerText = "Browser Speech API not supported in this browser. Use Chrome/Edge.";
+            }
+        </script>
+    """, height=60)
+
+    # Main Docked Prompt Bar Container
     with st.container(border=True):
-        c_add, c_input, c_mic, c_send = st.columns([0.6, 7.4, 0.7, 0.7])
+        c_add, c_input, c_send = st.columns([0.6, 8.1, 0.7])
         
-        # Left Attachment (+) Button
         with c_add:
-            with st.popover("➕", help="Attach File or Image"):
-                uploaded_file = st.file_uploader("Upload Image or Syllabus PDF", type=["png", "jpg", "jpeg"])
+            with st.popover("➕", help="Attach Image / PDF Routine"):
+                uploaded_file = st.file_uploader("Upload Routine File", type=["png", "jpg", "jpeg"])
             if "uploaded_file" not in locals():
                 uploaded_file = None
 
-        # Middle Input Field
         with c_input:
-            prompt_text = st.text_input(
-                "chat_bar", 
-                placeholder="Ask Gemini to build or modify your daily timetable...", 
+            user_text = st.text_input(
+                "chat_bar_input",
+                value=st.session_state.voice_text,
+                placeholder="Ask Gemini to build or modify your daily timetable...",
                 label_visibility="collapsed"
             )
 
-        # Right Mic Button
-        with c_mic:
-            with st.popover("🎤", help="Voice Dictation"):
-                voice_transcript = st.text_input("Voice Input", placeholder="Speak using phone mic...")
-            if "voice_transcript" not in locals():
-                voice_transcript = ""
-
-        # Right Submit Button (Up Arrow)
         with c_send:
             submit_btn = st.button("⬆️", use_container_width=True)
 
-    # Process Action
-    active_prompt = prompt_text if prompt_text else (voice_transcript if voice_transcript else None)
-
-    if submit_btn and (active_prompt or uploaded_file):
+    # Process Form
+    if submit_btn and (user_text or uploaded_file):
         if api_key:
-            with st.spinner("Gemini is updating your cloud database..."):
+            with st.spinner("Updating database via Gemini..."):
                 try:
                     img = PIL.Image.open(uploaded_file) if uploaded_file else None
-                    prompt_str = active_prompt if active_prompt else "Extract routine from attached image and update my timetable."
                     
-                    new_plan = adjust_schedule_with_chat(prompt_str, current_sched, api_key, image=img)
+                    new_plan = adjust_schedule_with_chat(user_text, current_sched, api_key, image=img)
                     save_schedule(new_plan.physics_slot, new_plan.chemistry_slot, new_plan.math_slot, new_plan.strategy_advice)
                     
                     summary = f"**Strategy:** {new_plan.strategy_advice}\n\n" \
@@ -177,10 +209,11 @@ with tab1:
                               f"• **Math:** {new_plan.math_slot}"
                     
                     st.session_state.latest_response = summary
+                    st.session_state.voice_text = ""
                     st.success("Database updated successfully!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error updating schedule: {e}")
+                    st.error(f"Error executing plan: {e}")
         else:
             st.error("Please enter your Gemini API Key in the sidebar.")
 
