@@ -60,7 +60,13 @@ class PYQQuestion(BaseModel):
 
 # --- AI Agents ---
 def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.3)
+    # Explicitly using 'version="v1"' prevents the 404/v1beta endpoint error
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        google_api_key=api_key,
+        temperature=0.3,
+        version="v1"
+    )
     structured_llm = llm.with_structured_output(DynamicSchedule)
     
     prompt = f"Current State: {current_state}\nUser Request: '{user_prompt}'"
@@ -69,7 +75,12 @@ def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: st
     return structured_llm.invoke(prompt)
 
 def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PYQQuestion:
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        google_api_key=api_key,
+        temperature=0.1,
+        version="v1"
+    )
     return llm.with_structured_output(PYQQuestion).invoke(f"Subject: {subject}, Chapter: {chapter}, Exam: {exam}")
 
 # --- UI Setup ---
@@ -108,7 +119,7 @@ selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE",
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
-# --- TAB 1: Real-Time Voice-to-Text Input Sync ---
+# --- TAB 1: Chat Interface ---
 with tab1:
     st.header("✨ Gemini Timetable Copilot")
     st.caption("Prompt Gemini via text, speech recorder, or image attachment.")
@@ -137,12 +148,12 @@ with tab1:
         key="STT"
     )
 
-    # If voice is captured, update the session state buffer
+    # Update session state if voice recording is returned
     if recorded_text and recorded_text != st.session_state.voice_text:
         st.session_state.voice_text = recorded_text
         st.rerun()
 
-    # Prompt Bar Container
+    # Chat Input Container
     with st.container(border=True):
         c_add, c_input, c_send = st.columns([0.6, 8.1, 0.7])
         
@@ -163,7 +174,7 @@ with tab1:
         with c_send:
             submit_btn = st.button("⬆️", use_container_width=True)
 
-    # Submit Processing
+    # Submission Logic
     if submit_btn and (user_text or uploaded_file):
         if api_key:
             with st.spinner("Updating database via Gemini..."):
