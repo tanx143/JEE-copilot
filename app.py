@@ -60,7 +60,7 @@ class PYQQuestion(BaseModel):
 
 # --- AI Agents ---
 def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.3)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.3)
     structured_llm = llm.with_structured_output(DynamicSchedule)
     
     prompt = f"Current State: {current_state}\nUser Request: '{user_prompt}'"
@@ -69,7 +69,7 @@ def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: st
     return structured_llm.invoke(prompt)
 
 def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PYQQuestion:
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.1)
     return llm.with_structured_output(PYQQuestion).invoke(f"Subject: {subject}, Chapter: {chapter}, Exam: {exam}")
 
 # --- UI Setup ---
