@@ -1,13 +1,12 @@
 import os
+import json
+from typing import List, Optional
+import PIL.Image
 import streamlit as st
 import google.generativeai as genai
 from groq import Groq
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
-from typing import List, Optional
-import PIL.Image
-import json
-from streamlit_mic_recorder import speech_to_text
 
 # --- Supabase Connection ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
@@ -66,7 +65,6 @@ def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: st
 
     if provider == "Google Gemini":
         genai.configure(api_key=api_key)
-        # Using gemini-1.5-flash-latest fixes the 404 error
         model = genai.GenerativeModel("gemini-1.5-flash-latest")
         
         contents = [prompt]
@@ -86,11 +84,10 @@ def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: st
     elif provider == "Groq (Llama 3)":
         client = Groq(api_key=api_key)
         json_schema = DynamicSchedule.model_json_schema()
-        
         system_msg = f"You are a study schedule assistant. You MUST respond ONLY with valid JSON matching this schema:\n{json.dumps(json_schema)}"
         
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
@@ -122,7 +119,7 @@ def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str, provi
         system_msg = f"You are an exam generator. Respond ONLY in valid JSON matching this schema:\n{json.dumps(json_schema)}"
         
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
@@ -170,7 +167,7 @@ if ai_provider == "Google Gemini":
     st.sidebar.caption("Get key from [aistudio.google.com](https://aistudio.google.com/)")
 else:
     api_key = st.sidebar.text_input("Enter Groq API Key", type="password", key="sidebar_groq_key")
-    st.sidebar.caption("Get 100% free key from [console.groq.com](https://console.groq.com)")
+    st.sidebar.caption("Get free key from [console.groq.com](https://console.groq.com)")
 
 selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE", "AUAT"], key="sidebar_target_exam")
 
@@ -180,10 +177,7 @@ current_sched = load_schedule()
 # --- TAB 1: Chat Interface ---
 with tab1:
     st.header(f"✨ Timetable Copilot ({ai_provider})")
-    st.caption("Prompt your AI assistant via text, speech recorder, or image attachment.")
-
-    if "voice_text" not in st.session_state:
-        st.session_state.voice_text = ""
+    st.caption("Prompt your AI assistant via text or image attachment.")
 
     if "latest_response" in st.session_state:
         st.markdown(f"""
@@ -194,19 +188,6 @@ with tab1:
         """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    st.markdown("**🎙️ Record Your Speech:** Click to start speaking")
-    recorded_text = speech_to_text(
-        language='en',
-        start_prompt="🎙️ Start Voice Recording",
-        stop_prompt="🔴 Stop & Transcribe",
-        just_once=True,
-        key="STT"
-    )
-
-    if recorded_text and recorded_text != st.session_state.voice_text:
-        st.session_state.voice_text = recorded_text
-        st.rerun()
 
     with st.container(border=True):
         c_add, c_input, c_send = st.columns([0.6, 8.1, 0.7])
@@ -220,7 +201,6 @@ with tab1:
         with c_input:
             user_text = st.text_input(
                 "chat_bar_input",
-                value=st.session_state.voice_text,
                 placeholder="Ask AI to build or modify your daily timetable...",
                 label_visibility="collapsed",
                 key="main_chat_bar_input"
@@ -247,7 +227,6 @@ with tab1:
                               f"• **Math:** {new_plan.math_slot}"
                     
                     st.session_state.latest_response = summary
-                    st.session_state.voice_text = ""
                     st.success("Database updated successfully!")
                     st.rerun()
                 except Exception as e:
