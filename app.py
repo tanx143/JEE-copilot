@@ -3,7 +3,8 @@ import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
-from typing import List
+from typing import List, Optional
+import PIL.Image
 
 # --- Supabase Connection ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
@@ -56,19 +57,23 @@ class PYQQuestion(BaseModel):
     correct_option: str = Field(description="Correct option letter")
     explanation: str = Field(description="Step-by-step solution")
 
-# --- AI Agents ---
-def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str) -> DynamicSchedule:
-    llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", google_api_key=api_key, temperature=0.3)
-    return llm.with_structured_output(DynamicSchedule).invoke(f"Current Strategy: {current_state}\nUser Request: '{user_prompt}'")
+# --- AI Agents (Fixed Model: gemini-2.5-flash) ---
+def adjust_schedule_with_chat(user_prompt: str, current_state: dict, api_key: str, image=None) -> DynamicSchedule:
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.3)
+    structured_llm = llm.with_structured_output(DynamicSchedule)
+    
+    prompt = f"Current State: {current_state}\nUser Request: '{user_prompt}'"
+    if image:
+        return structured_llm.invoke([prompt, image])
+    return structured_llm.invoke(prompt)
 
 def generate_pyq_quiz(subject: str, chapter: str, exam: str, api_key: str) -> PYQQuestion:
-    llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", google_api_key=api_key, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.1)
     return llm.with_structured_output(PYQQuestion).invoke(f"Subject: {subject}, Chapter: {chapter}, Exam: {exam}")
 
 # --- UI Setup ---
 st.set_page_config(page_title="JEE / WBJEE AI Copilot", layout="wide", page_icon="⚡")
 
-# Custom Styling for Dashboard
 st.markdown("""
 <style>
     .stMetric {
@@ -84,6 +89,13 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 25px;
     }
+    .gemini-card {
+        background-color: #1a1d24;
+        border: 1px solid #2d323e;
+        border-radius: 12px;
+        padding: 20px;
+        margin-top: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -95,48 +107,56 @@ selected_exam = st.sidebar.selectbox("Active Target Exam", ["JEE Main", "WBJEE",
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Timetable Chat", "📝 PYQ Engine", "📊 Schedule Dashboard", "📈 Dynamic Progress Tracker"])
 current_sched = load_schedule()
 
-# --- TAB 1: Gemini Conversational Layout ---
+# --- TAB 1: Streamlined Gemini Chat Interface ---
 with tab1:
-    st.header("✨ Gemini Strategy & Schedule Copilot")
-    st.caption("Ask Gemini to build, shift, or adjust your timetable. Changes save to your database in real time.")
-    
-    # Initialize Chat History in Session State
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Hello! I am your AI Study Assistant. Tell me your preferred study hours, tuition return time, or chapter targets, and I'll build or modify your timetable automatically."}
-        ]
+    st.header("✨ Gemini Timetable Copilot")
+    st.caption("Prompt Gemini via text, voice transcript, or syllabus image upload to update your database in real time.")
 
-    # Render Chat History
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+    # Attachments & Multimodal Toolbar (+)
+    with st.expander("📎 (+) Attach PDF / Image or Voice Transcript Input", expanded=False):
+        col_file, col_voice = st.columns(2)
+        with col_file:
+            uploaded_file = st.file_uploader("Upload Routine Image / Syllabus PDF", type=["png", "jpg", "jpeg"])
+        with col_voice:
+            voice_text = st.text_input("🎤 Voice Input / Dictation Transcript", placeholder="Speak using phone keyboard mic...")
 
-    # Chat Input Box
-    if user_input := st.chat_input("e.g. I get back from tuition at 4 PM. Adjust my timetable with 1hr gym time and 3 lectures..."):
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.write(user_input)
+    # Active Response Card Container (Replaces bloated chat stack)
+    if "latest_response" in st.session_state:
+        st.markdown(f"""
+        <div class="gemini-card">
+            <h4 style="color: #4da6ff; margin-top:0;">✨ Latest Generated Plan</h4>
+            <p>{st.session_state.latest_response}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
+    # Chat Input Interface
+    user_input = st.chat_input("Ask Gemini to build or modify your daily timetable...")
+
+    # Process prompt if submitted via text, voice, or image
+    active_prompt = user_input or (voice_text if voice_text else None)
+
+    if active_prompt or uploaded_file:
         if api_key:
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing schedule & updating database..."):
-                    try:
-                        new_plan = adjust_schedule_with_chat(user_input, current_sched, api_key)
-                        save_schedule(new_plan.physics_slot, new_plan.chemistry_slot, new_plan.math_slot, new_plan.strategy_advice)
-                        
-                        response_text = f"**Schedule Updated & Synced to Database!**\n\n" \
-                                        f"**Strategy Advice:** {new_plan.strategy_advice}\n\n" \
-                                        f"• **Physics Slot:** {new_plan.physics_slot}\n" \
-                                        f"• **Chemistry Slot:** {new_plan.chemistry_slot}\n" \
-                                        f"• **Math Slot:** {new_plan.math_slot}"
-                        
-                        st.write(response_text)
-                        st.session_state.messages.append({"role": "assistant", "content": response_text})
-                    except Exception as e:
-                        st.error(f"Error updating schedule: {e}")
+            with st.spinner("Gemini is updating your cloud database..."):
+                try:
+                    img = PIL.Image.open(uploaded_file) if uploaded_file else None
+                    prompt_str = active_prompt if active_prompt else "Extract routine from attached image and update my timetable."
+                    
+                    new_plan = adjust_schedule_with_chat(prompt_str, current_sched, api_key, image=img)
+                    save_schedule(new_plan.physics_slot, new_plan.chemistry_slot, new_plan.math_slot, new_plan.strategy_advice)
+                    
+                    summary = f"**Strategy:** {new_plan.strategy_advice}\n\n" \
+                              f"• **Physics:** {new_plan.physics_slot}\n" \
+                              f"• **Chemistry:** {new_plan.chemistry_slot}\n" \
+                              f"• **Math:** {new_plan.math_slot}"
+                    
+                    st.session_state.latest_response = summary
+                    st.success("Database updated successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error updating schedule: {e}")
         else:
-            with st.chat_message("assistant"):
-                st.error("Please enter your Gemini API Key in the left sidebar to enable AI timetable updates.")
+            st.error("Please enter your Gemini API Key in the sidebar.")
 
 # --- TAB 2: PYQ Engine ---
 with tab2:
@@ -160,12 +180,11 @@ with tab2:
             else: st.error(f"Incorrect. Correct Option: {q.correct_option}")
             st.info(f"**Solution:**\n{q.explanation}")
 
-# --- TAB 3: Upgraded Schedule Dashboard ---
+# --- TAB 3: Schedule Dashboard ---
 with tab3:
     st.header("📊 Active Schedule Dashboard")
     st.caption("Live, database-synced study slots generated by your AI Copilot.")
     
-    # Active Strategy Card
     st.markdown(f"""
     <div class="strategy-box">
         <h4 style="margin:0; color:#00e676;">🧠 Active AI Strategy Focus</h4>
@@ -173,7 +192,6 @@ with tab3:
     </div>
     """, unsafe_allow_html=True)
     
-    # Subject Cards in Grid Layout
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -191,11 +209,10 @@ with tab3:
             st.subheader("📐 Mathematics Plan")
             st.markdown(f"**Current Target & Slot:**\n\n{current_sched['math']}")
 
-# --- TAB 4: Progress Tracker ---
+# --- TAB 4: Dynamic Progress Tracker ---
 with tab4:
     st.header("📈 Interactive Chapter & Lecture Tracker")
     
-    # 1. Input Form
     with st.expander("➕ Add New Chapter Target", expanded=True):
         c_day, c_sub, c_chap, c_lecs = st.columns([1, 1, 2, 1])
         with c_day: day_in = st.number_input("Day #", min_value=1, value=1, step=1)
@@ -211,7 +228,6 @@ with tab4:
             else:
                 st.warning("Please enter a chapter name.")
 
-    # 2. Render Interactive Chapter Cards & Progress Bars
     chapters = get_all_chapters()
     if chapters:
         total_syllabus_lecs = sum(c['total_lectures'] for c in chapters)
@@ -238,7 +254,6 @@ with tab4:
                         delete_chapter(ch['id'])
                         st.rerun()
 
-                # Interactive Checkbox Grid
                 st.write("**Mark Finished Lectures:**")
                 cols = st.columns(min(ch['total_lectures'], 8))
                 new_completed = 0
@@ -250,12 +265,10 @@ with tab4:
                     if cols[col_idx].checkbox(f"L{i}", value=is_checked, key=f"ch_{ch['id']}_l{i}"):
                         new_completed += 1
                 
-                # Update DB if checkbox state changed
                 if new_completed != ch['completed_lectures']:
                     update_lecture_progress(ch['id'], new_completed)
                     st.rerun()
 
-                # Individual Chapter Level Progress Bar
                 ch_pct = new_completed / ch['total_lectures']
                 st.progress(ch_pct)
                 st.caption(f"Chapter Progress: **{new_completed}/{ch['total_lectures']} Lectures** ({ch_pct * 100:.0f}% Completed)")
