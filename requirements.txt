@@ -1,6 +1,7 @@
 streamlit
 supabase
 langchain-google-genai>=2.0.0
+langchain-core
 pydantic
 pillow
 streamlit-mic-recorder
